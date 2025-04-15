@@ -1,0 +1,95 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/Counters.sol";
+
+contract AIMarketplace is Ownable {
+    using Counters for Counters.Counter;
+
+    struct Model {
+        uint256 id;
+        string name;
+        string description;
+        uint256 price;
+        address seller;
+        address buyer;
+        bool isSold;
+        uint256 escrowAmount;
+        bool isUnderReview;
+    }
+
+    IERC20 public paymentToken;
+    Counters.Counter private modelCount;
+    mapping(uint256 => Model) public models;
+
+    event ModelListed(uint256 id, string name, uint256 price, address seller);
+    event ModelPurchased(uint256 id, address buyer, address seller);
+    event EscrowReleased(uint256 id);
+    event EscrowRefunded(uint256 id);
+    event ModelReviewed(uint256 id, uint256 rating, string comment);
+
+    constructor(IERC20 _paymentToken) {
+        paymentToken = _paymentToken;
+    }
+
+    function listModel(string memory _name, string memory _description, uint256 _price) public {
+        modelCount.increment();
+        uint256 newModelId = modelCount.current();
+        models[newModelId] = Model(newModelId, _name, _description, _price, msg.sender, address(0), false, 0, false);
+        emit ModelListed(newModelId, _name, _price, msg.sender);
+    }
+
+    function purchaseModel(uint256 _id) public {
+        Model storage model = models[_id];
+        require(model.id == _id, "Model does not exist");
+        require(!model.isSold, "Model is already sold");
+        
+        // Transfer tokens to escrow
+        uint256 escrowAmount = model.price;
+        require(paymentToken.transferFrom(msg.sender, address(this), escrowAmount), "Payment failed");
+
+        model.isSold = true;
+        model.buyer = msg.sender;
+        model.escrowAmount = escrowAmount;
+        emit ModelPurchased(_id, msg.sender, model.seller);
+    }
+
+    function releaseEscrow(uint256 _id) public {
+        Model storage model = models[_id];
+        require(model.isSold, "Model is not sold");
+        require(msg.sender == model.seller, "Only seller can release escrow");
+
+        require(paymentToken.transfer(model.seller, model.escrowAmount), "Escrow transfer failed");
+        model.escrowAmount = 0;
+        emit EscrowReleased(_id);
+    }
+
+    function refundBuyer(uint256 _id) public {
+        Model storage model = models[_id];
+        require(model.isSold, "Model is not sold");
+        require(msg.sender == model.buyer, "Only buyer can request refund");
+        
+        require(paymentToken.transfer(model.buyer, model.escrowAmount), "Refund transfer failed");
+        model.isSold = false;
+        model.escrowAmount = 0;
+        emit EscrowRefunded(_id);
+    }
+
+    function reviewModel(uint256 _id, uint256 _rating, string memory _comment) public {
+        Model storage model = models[_id];
+        require(model.isSold, "Model is not sold");
+        require(msg.sender == model.buyer, "Only buyer can leave a review");
+        require(!model.isUnderReview, "Review already submitted");
+
+        // Logic to save or process the review should go here (e.g., struct for reviews)
+        emit ModelReviewed(_id, _rating, _comment);
+        model.isUnderReview = true;  // Prevent duplicate reviews
+    }
+
+    function getModelDetails(uint256 _id) public view returns (string memory, string memory, uint256, address, address, bool, uint256) {
+        Model storage model = models[_id];
+        return (model.name, model.description, model.price, model.seller, model.buyer, model.isSold, model.escrowAmount);
+    }
+}
